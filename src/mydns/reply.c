@@ -571,8 +571,7 @@ static inline int
 reply_add_txt(TASK *t, RR *r)
 {
 	char		*dest;
-	char		size;
-	size_t	len;
+	size_t	len, rdlen, nchunks, off, i;
 	MYDNS_RR	*rr = (MYDNS_RR *)r->rr;
 
 #if DEBUG_ENABLED && DEBUG_REPLY
@@ -583,16 +582,34 @@ reply_add_txt(TASK *t, RR *r)
 	if (reply_start_rr(t, r, r->name, DNS_QTYPE_TXT, rr->ttl, "TXT") < 0)
 		return (-1);
 
-	size = len + 1;
-	r->length += SIZE16 + size;
+	/*
+	** A TXT record's RDATA is one or more <character-string>s, each a single
+	** length octet (0..255) followed by that many bytes (RFC 1035 3.3.14).
+	** The old code emitted a single string with `char size = len + 1', which
+	** (a) truncated/overflowed the signed char for data >= 127 bytes, feeding a
+	** bogus (often negative, hence huge-when-unsigned) size into rdata_enlarge()
+	** -> under-allocation / crash, and (b) could not represent data > 255 bytes
+	** at all.  Emit the data in <=255-byte chunks using unsigned arithmetic.
+	*/
+	nchunks = (len + 254) / 255;
+	if (!nchunks)
+		nchunks = 1;												/* Always emit at least one (possibly empty) string */
+	rdlen = len + nchunks;										/* One length octet per chunk */
 
-	if (!(dest = rdata_enlarge(t, SIZE16 + size)))
+	r->length += SIZE16 + rdlen;
+
+	if (!(dest = rdata_enlarge(t, SIZE16 + rdlen)))
 		return dnserror(t, DNS_RCODE_SERVFAIL, ERR_INTERNAL);
 
-	DNS_PUT16(dest, size);
-	*dest++ = len;
-	memcpy(dest, rr->data, len);
-	dest += len;
+	DNS_PUT16(dest, rdlen);
+	for (i = 0, off = 0; i < nchunks; i++)
+	{
+		size_t chunk = (len - off > 255) ? 255 : (len - off);
+		*dest++ = (unsigned char)chunk;
+		memcpy(dest, rr->data + off, chunk);
+		dest += chunk;
+		off += chunk;
+	}
 	return (0);
 }
 /*--- reply_add_txt() ---------------------------------------------------------------------------*/
