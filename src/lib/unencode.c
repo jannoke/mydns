@@ -64,8 +64,17 @@ name_unencode(char *start, size_t slen, char *current, char *dest, size_t destsi
 			DNS_GET16(new_offset, s);
 			new_offset &= ~0xC000;
 
+			/*
+			** A compression pointer must always point *backward*, to a label
+			** that occurs strictly earlier in the message (RFC 1035 4.1.4).
+			** Requiring new_offset < current_offset means every jump strictly
+			** decreases the offset, so a packet can no longer make us chase a
+			** pointer loop (e.g. offset 0 -> 2 -> 0) forever: the original code
+			** only rejected a pointer to the *current* position, so any 2+ node
+			** cycle hung the server on a single query (DoS).
+			*/
 			if (((start + new_offset) < start)				/* Pointing out-of-bounds */
-				|| (current_offset == new_offset)			/* Pointing to current position */
+				|| (new_offset >= current_offset)			/* Not pointing strictly backward */
 				|| ((start + new_offset) > start + slen))	/* Pointing out-of-bounds */
 			{
 				dest[0] = ERR_Q_INVALID_COMPRESSION;
