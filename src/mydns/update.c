@@ -217,6 +217,7 @@ static char *
 update_gobble_rr(TASK *t, MYDNS_SOA *soa, char *query, size_t querylen, char *current, UQRR *rr)
 {
 	char *src = current;
+	char *end = query + querylen;								/* One past the last valid byte */
 
 	if (!(src = name_unencode(query, querylen, src, rr->name, sizeof(rr->name))))
 	{
@@ -224,10 +225,35 @@ update_gobble_rr(TASK *t, MYDNS_SOA *soa, char *query, size_t querylen, char *cu
 		return NULL;
 	}
 
+	/*
+	** Make sure the fixed RR header (type+class+ttl+rdlength = 10 octets) is
+	** actually present before reading it.  Without this, a short packet makes
+	** the DNS_GET* macros read past the end of the query buffer.
+	*/
+	if (src + SIZE16 + SIZE16 + SIZE32 + SIZE16 > end)
+	{
+		formerr(t, DNS_RCODE_FORMERR, ERR_MALFORMED_REQUEST, NULL);
+		return NULL;
+	}
+
 	DNS_GET16(rr->type, src);
 	DNS_GET16(rr->class, src);
 	DNS_GET32(rr->ttl, src);
 	DNS_GET16(rr->rdlength, src);
+
+	/*
+	** rr->rdlength is an attacker-controlled 16-bit value, but rr->rdata is a
+	** fixed DNS_MAXPACKETLEN_UDP+1 byte buffer.  Over TCP a query can be up to
+	** 64 KB, so an oversized rdlength overflowed rr->rdata (heap, since UQRRs
+	** are calloc'd) -- this is CVE-2007-2362.  Also refuse an rdlength that
+	** claims more bytes than the packet actually contains (over-read).
+	*/
+	if (rr->rdlength > sizeof(rr->rdata) || src + rr->rdlength > end)
+	{
+		formerr(t, DNS_RCODE_FORMERR, ERR_MALFORMED_REQUEST, NULL);
+		return NULL;
+	}
+
 	memcpy(rr->rdata, src, rr->rdlength);
 	src += rr->rdlength;
 
