@@ -354,13 +354,18 @@ text_retrieve(char *src, char *end, char *data, size_t datalen, int one_word_onl
 {
 	int n, x;														/* Offset in 'data' */
 
-	for (n = 0; src < end && n < datalen; )
+	/*
+	** The guards below reserve one byte for the terminating NUL: they stop at
+	** datalen-1 rather than datalen.  The original code let 'n' reach datalen
+	** and then wrote data[n] = '\0' one byte past the caller's buffer.
+	*/
+	for (n = 0; src < end && (size_t)n + 1 < datalen; )
 	{
 		int len = *src++;
 
 		if (n)
 			data[n++] = ' ';
-		for (x = 0; x < len && src < end && n < datalen; x++)
+		for (x = 0; x < len && src < end && (size_t)n + 1 < datalen; x++)
 			data[n++] = *src++;
 		if (one_word_only)
 		{
